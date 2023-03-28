@@ -1,11 +1,13 @@
 import math
 import time
 
+import keras
 import numpy as np
 from keras.callbacks import ModelCheckpoint, EarlyStopping
 from keras.layers import Input, Dense
+from keras.losses import mse
 from keras.models import Model
-from tensorflow.keras import backend as K
+from tensorflow.python.keras import backend as K
 # from utils import plot_confusion_matrix
 from sklearn.model_selection import train_test_split
 
@@ -191,6 +193,78 @@ def denoising_ae_process(X, num_features, noise_factor=0.5, epochs=50, batch_siz
     print("Plot Models")
     plot_learn_model(model=model, img_file='autoencoder_model.png')
     plot_learn_model(model=encoder, img_file='encoder_model.png')
+    X = encoder.predict(X)
+    # X_test = encoder.predict(X_test)
+    # plot history
+    plot_ae_history(history)
+    return X, encoder  # , X_test, encoder
+
+
+def sae_loss(x, alpha=10):
+    return alpha * K.mean(K.pow(x=x, a=2))
+
+
+def som_loss(weights, distances):
+    """
+    SOM loss
+
+    # Arguments
+        weights: weights for the weighted sum, Tensor with shape `(n_samples, n_prototypes)`
+        distances: pairwise squared euclidean distances between inputs and prototype vectors, Tensor with shape `(n_samples, n_prototypes)`
+    # Return
+        SOM reconstruction loss
+    """
+    return K.mean(K.mean(weights * distances), axis=1)
+    # return tf.reduce_mean(tf.reduce_sum(weights * distances, axis=1))
+
+
+def denoising_sae_process(X, num_features, noise_factor=0.5, epochs=50, batch_size=200):  # , X_test):
+    X_train, X_val = train_test_split(X, test_size=0.2, shuffle=True)
+    X_train_noisy = X_train + noise_factor * np.random.normal(loc=0.0, scale=1.0, size=X_train.shape)
+    X_val_noisy = X_val + noise_factor * np.random.normal(loc=0.0, scale=1.0, size=X_val.shape)
+    input_dim = X_train.shape[1]
+    # model, encoder = create_model(X_train.shape[1], num_features=num_features)  # top_n_features)
+
+    inp = Input(shape=(input_dim,))
+    encoded = Dense(int(math.ceil(0.75 * input_dim)), activation="tanh")(inp)
+    encoded = Dense(int(math.ceil(0.5 * input_dim)), activation="tanh")(encoded)
+    encoded = Dense(int(math.ceil(0.33 * input_dim)), activation="tanh")(encoded)
+    encoded = Dense(int(math.ceil(0.25 * input_dim)), activation="tanh")(encoded)
+    decoded = Dense(int(math.ceil(0.33 * input_dim)), activation="tanh")(encoded)
+    decoded = Dense(int(math.ceil(0.5 * input_dim)), activation="tanh")(decoded)
+    decoded = Dense(int(math.ceil(0.75 * input_dim)), activation="tanh")(decoded)
+    decoded = Dense(input_dim)(decoded)
+    # return Model(inp, decoder), Model(inp, encoder)
+    model = Model(inp, decoded)
+    encoder = Model(inp, encoded)
+    alpha = 10
+    sae_loss = keras.losses.mean_squared_error(inp, decoded) + alpha * K.mean(K.pow(x=encoded, a=2))
+    model.add_loss(sae_loss)
+    model.compile(optimizer="adam")
+    cp = ModelCheckpoint(filepath=f"dump_models/model.h5",
+                         monitor='val_loss',
+                         save_best_only=True,
+                         verbose=0)
+    # es = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+    es = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    start = time.time()
+    #     epochs = 100
+    # epochs = 50
+    # batch_size = 200  # 128, 256, 512 need to be tested
+    history = model.fit(X_train_noisy, X_train,
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        validation_data=(X_val_noisy, X_val),
+                        verbose=1,
+                        callbacks=[cp, es])
+
+    end = time.time()
+    print('time')
+    print(end - start)
+    print(model.summary())
+    print("Plot Models")
+    plot_learn_model(model=model, img_file='shrink_autoencoder_model.png')
+    plot_learn_model(model=encoder, img_file='shrink_encoder_model.png')
     X = encoder.predict(X)
     # X_test = encoder.predict(X_test)
     # plot history
